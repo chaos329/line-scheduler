@@ -59,7 +59,7 @@
 <main id="app"><p class="hint">読み込み中…</p></main>
 
 <script src="config.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/dist/umd/supabase.min.js"></script>
 <script>
 // 設定は config.js(ローカルは config.example.js をコピー、本番は GitHub Actions が生成)から読み込む
 const { SUPABASE_URL, SUPABASE_ANON_KEY } = window.APP_CONFIG || {};
@@ -87,16 +87,21 @@ async function api(body) {
 
 /* ---------- 新規作成 ---------- */
 async function renderCreate() {
-  const { data: groups } = await sb.from("line_groups").select("id,name").order("created_at");
+  const token = params.get("g");
+  if (!token) {
+    app.innerHTML = `<h1>日程調整</h1>
+      <div class="notice">日程調整を作るには、LINEグループ専用のURLが必要です。Botを招待したグループで「登録」と発言すると、専用URLが届きます。</div>`;
+    return;
+  }
+  let group;
+  try { group = await api({ action: "get_group", create_token: token }); }
+  catch (err) { app.innerHTML = `<h1>日程調整</h1><div class="notice error">${esc(err.message)}</div>`; return; }
   app.innerHTML = `
     <h1>日程調整を作る</h1>
-    <p class="sub">作成すると、選んだLINEグループに回答用リンクが届きます。</p>
-    ${groups?.length ? "" : `<div class="notice error">通知先のLINEグループがありません。Botをグループに招待して「登録」と発言してください。</div>`}
+    <p class="sub">作成すると、LINEグループ${group.name ? `「${esc(group.name)}」` : ""}に回答用リンクが届きます。</p>
     <label for="title">イベント名</label><input id="title" placeholder="例: 11月の定例ミーティング">
     <label for="desc">メモ(任意)</label><textarea id="desc" rows="2"></textarea>
     <label for="org">幹事の名前</label><input id="org" value="${esc(store.get("name") || "")}">
-    <label for="group">通知するLINEグループ</label>
-    <select id="group">${(groups || []).map((g) => `<option value="${esc(g.id)}">${esc(g.name || g.id)}</option>`).join("")}</select>
     <label>候補日時</label>
     <div id="cands"></div>
     <button type="button" id="add">候補を追加</button>
@@ -124,7 +129,7 @@ async function renderCreate() {
     try {
       const r = await api({
         action: "create_event", title: val("title"), description: val("desc"), organizer: val("org"),
-        group_id: document.getElementById("group").value,
+        create_token: token,
         deadline: val("deadline") ? new Date(val("deadline")).toISOString() : null, candidates,
       });
       store.set("name", val("org"));
@@ -139,11 +144,7 @@ async function renderCreate() {
 
 /* ---------- 回答・確認 ---------- */
 async function renderEvent(id) {
-  const [{ data: ev }, { data: cands }, { data: rs }] = await Promise.all([
-    sb.from("events").select("*").eq("id", id).single(),
-    sb.from("candidates").select("*").eq("event_id", id).order("starts_at"),
-    sb.from("responses").select("*").eq("event_id", id),
-  ]);
+  const { event: ev, candidates: cands, responses: rs } = await api({ action: "get_event", event_id: id }).catch(() => ({}));
   if (!ev) { app.innerHTML = `<h1>イベントが見つかりません</h1><p class="sub">リンクをもう一度確認してください。</p>`; return; }
 
   const adminToken = params.get("a") || store.get("admin:" + id);

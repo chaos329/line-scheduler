@@ -1,3 +1,13 @@
-# line-webhook は LINE から呼ばれる(JWTなし)ため JWT 検証を無効化。署名検証はコード内で実施。
+# 新方式の API キー(sb_publishable_...)は JWT ではなく、プラットフォームの verify_jwt では検証できないため、
+# 各関数で JWT 検証をオフにし、関数内で認可する。
+#  - line-webhook : LINE の署名(x-line-signature)をコード内で検証
+#  - schedule-api : リンク共有型で誰でも回答できる設計。幹事操作は admin_token をコード内で検証
+#  - remind       : cron からの呼び出し。CRON_SECRET をコード内で検証
 [functions.line-webhook]
+verify_jwt = false
+
+[functions.schedule-api]
+verify_jwt = false
+
+[functions.remind]
 verify_jwt = false

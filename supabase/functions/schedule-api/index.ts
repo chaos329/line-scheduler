@@ -1,9 +1,8 @@
 // 日程調整API: イベント作成 / 回答 / 確定。書き込みはすべてここ(service role)経由。
 // 作成・確定時にLINEグループへ通知する。
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+import { db } from "../_shared/db.ts";
 import { fmt, pushText } from "../_shared/line.ts";
 
-const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 const APP_URL = Deno.env.get("APP_URL")!; // フロントのURL(例: https://xxx.vercel.app)
 
 const cors = {
@@ -13,10 +12,38 @@ const cors = {
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { ...cors, "Content-Type": "application/json" } });
 
+// グループ専用トークン → グループ(トークンが違えば null)
+async function groupByToken(token: unknown) {
+  if (typeof token !== "string" || token.length < 32) return null;
+  const { data } = await db.from("line_groups").select("id,name").eq("create_token", token).maybeSingle();
+  return data;
+}
+
+async function getGroup(p: any) {
+  const g = await groupByToken(p.create_token);
+  return g ? json({ name: g.name }) : json({ error: "このURLは無効です。LINEグループで「登録」と発言して、専用URLを確認してください" }, 404);
+}
+
+// group_id は返さない。イベントIDを知っている人だけが読める
+async function getEvent(p: any) {
+  const { data: event } = await db.from("events")
+    .select("id,title,description,organizer,deadline,status,confirmed_candidate_id")
+    .eq("id", p.event_id).maybeSingle();
+  if (!event) return json({ error: "イベントが見つかりません" }, 404);
+  const [{ data: candidates }, { data: responses }] = await Promise.all([
+    db.from("candidates").select("id,event_id,starts_at").eq("event_id", p.event_id).order("starts_at"),
+    db.from("responses").select("candidate_id,name,answer").eq("event_id", p.event_id),
+  ]);
+  return json({ event, candidates, responses });
+}
+
 async function createEvent(p: any) {
-  const { title, description, organizer, group_id, deadline, candidates } = p;
-  if (!title || !organizer || !group_id || !Array.isArray(candidates) || candidates.length === 0) {
-    return json({ error: "タイトル・幹事名・通知先グループ・候補日時は必須です" }, 400);
+  const { title, description, organizer, deadline, candidates } = p;
+  const group = await groupByToken(p.create_token);
+  if (!group) return json({ error: "このURLは無効です。LINEグループで「登録」と発言して、専用URLを確認してください" }, 403);
+  const group_id = group.id;
+  if (!title || !organizer || !Array.isArray(candidates) || candidates.length === 0) {
+    return json({ error: "タイトル・幹事名・候補日時は必須です" }, 400);
   }
   const { data: ev, error } = await db.from("events")
     .insert({ title, description, organizer, group_id, deadline: deadline || null })
@@ -78,6 +105,8 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   try {
     const p = await req.json();
+    if (p.action === "get_group") return await getGroup(p);
+    if (p.action === "get_event") return await getEvent(p);
     if (p.action === "create_event") return await createEvent(p);
     if (p.action === "respond") return await respond(p);
     if (p.action === "confirm") return await confirm(p);

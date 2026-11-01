@@ -22,7 +22,7 @@ line-scheduler/
 ### 1. Supabase(新規プロジェクト)
 1. 新しいプロジェクトを作成(ARMASとは別プロジェクトを推奨)。
 2. SQL Editor で `schema.sql` を実行。
-3. Project Settings → API から `Project URL` と `anon key` を控える。
+3. Project Settings → API Keys から `Project URL` と、公開用キー(新方式なら `Publishable key`(sb_publishable_...)、旧方式なら `anon public`)を控える。
 
 ### 2. LINE
 1. [LINE Developers](https://developers.line.biz/) で Messaging API チャネルを作成。
@@ -43,7 +43,7 @@ git push -u origin main
 - Settings → Pages → Build and deployment の Source を **GitHub Actions** にする
 - Settings → Secrets and variables → Actions
   - Secrets: `SUPABASE_ACCESS_TOKEN`([アカウントのトークン](https://supabase.com/dashboard/account/tokens))、`SUPABASE_PROJECT_REF`
-  - Variables: `SUPABASE_URL`、`SUPABASE_ANON_KEY`(anon キーのみ。service_role は入れない)
+  - Variables: `SUPABASE_URL`、`SUPABASE_ANON_KEY`(公開用キー=Publishable key か anon のみ。secret / service_role は入れない)
 
 **3-3. LINE のキーを Supabase に登録(最初の1回だけ・手元で実行)**
 ```bash
@@ -69,19 +69,23 @@ npx serve web
 
 ### 5. 通知先グループの登録
 LINE Bot を対象グループに招待すると自動で登録されます(すでに参加済みの場合はグループで「登録」と発言)。
-登録済みグループは画面の「通知するLINEグループ」に選択肢として表示されます。
+登録すると、Bot がそのグループ専用の日程調整ページのURL(`?g=...`)を返信します。**そのURLからだけ**イベントを作成でき、通知先はそのグループに固定されます(他グループは画面に表示されません)。
+- 専用URLが漏れたときは、グループで「URL再発行」と発言すると古いURLが無効になります。
+- すでに登録済みのグループは、もう一度「登録」と発言するとURLが返信されます。
+- グループを増やす予定がないときは、LINE Developers の「グループトークへの参加を許可」をオフにしておくと、意図しないグループへの招待を防げます。
 
 ### 6. リマインドの定期実行
 Supabase で `pg_cron` と `pg_net` を有効化し、`schema.sql` 末尾のコメントアウトされた `cron.schedule` を、プロジェクト値に置き換えて実行してください(毎時実行、各イベント1回のみ通知)。
 
 ## 使い方
-1. 画面でイベント名・候補日時・通知先グループを入力 → 「作成してLINEに通知する」。
+1. グループで届いた専用URLを開き、イベント名・候補日時を入力 → 「作成してLINEに通知する」。
 2. グループに届いたリンクから、各メンバーが名前を入力して ○△× を回答(再回答で上書き)。
 3. 幹事は作成したブラウザ(または表示される幹事用リンク)で「この日で確定する」→ 確定内容がLINEに通知されます。
 
 ## 仕様メモ・注意点
 - 認証なしのリンク共有型です。イベントIDは推測困難なUUIDですが、リンクを知っている人は回答できます。回答の名前は自己申告です。
 - 幹事用リンク(`&a=...` 付き)は確定権限を持つので、グループには共有しないでください。
-- 書き込みはすべて Edge Function(service role)経由で、anon キーからは読み取りのみ可能です。幹事トークン(`event_secrets`)は anon から読めません。
+- DB のテーブルはすべて anon キーから読み書きできません(RLS ポリシーなし)。読み書きは Edge Function 経由のみで、イベントの内容はイベントIDを知っている人だけが取得できます。グループIDは画面側に返しません。
+- 既存環境で `schema.sql` を実行済みの場合は、`migrations/001_group_create_token.sql` を SQL Editor で実行してください。
 - LINE の push メッセージは無料プランだと月間の送信数に上限があります。グループへの push は受信者の人数分カウントされる点に注意してください。
 - 日時は JST 表示です。

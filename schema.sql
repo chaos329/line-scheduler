@@ -4,6 +4,9 @@
 create table line_groups (
   id          text primary key,          -- LINEのgroupId
   name        text,
+  -- グループ専用の作成ページ用トークン。画面からは読めない(Edge Function 経由でのみ照合)
+  create_token text not null unique
+              default replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', ''),
   created_at  timestamptz not null default now()
 );
 
@@ -47,22 +50,18 @@ create table responses (
 create index on candidates(event_id);
 create index on responses(event_id);
 
--- RLS: 読み取りのみ anon に許可。書き込みは Edge Function(service role)経由。
+-- RLS: ポリシーを1つも作らない = anon(公開キー)からは全テーブルが読み書き不可。
+-- 読み書きはすべて Edge Function(サーバー側キー)経由。
 alter table line_groups   enable row level security;
 alter table events        enable row level security;
 alter table event_secrets enable row level security;
 alter table candidates    enable row level security;
 alter table responses     enable row level security;
 
-create policy "read groups"     on line_groups for select to anon using (true);
-create policy "read events"     on events      for select to anon using (true);
-create policy "read candidates" on candidates  for select to anon using (true);
-create policy "read responses"  on responses   for select to anon using (true);
-
--- リマインド用の定期実行(pg_cron + pg_net を有効化した上で、<PROJECT_REF> と <SERVICE_ROLE_KEY> を置換)
+-- リマインド用の定期実行(pg_cron + pg_net を有効化した上で、<PROJECT_REF> と <CRON_SECRET> を置換。CRON_SECRET は Edge Functions の Secrets にも同じ値を登録)
 -- select cron.schedule('remind-hourly', '0 * * * *', $$
 --   select net.http_post(
 --     url := 'https://<PROJECT_REF>.supabase.co/functions/v1/remind',
---     headers := jsonb_build_object('Authorization','Bearer <SERVICE_ROLE_KEY>')
+--     headers := jsonb_build_object('Authorization','Bearer <CRON_SECRET>')
 --   );
 -- $$);
