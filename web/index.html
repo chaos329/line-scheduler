@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>日程調整</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #f2f5f2; --surface: #ffffff; --ink: #14201b; --muted: #5d6b63; --rule: #d3dbd5;
+    --line: #06c755; --line-ink: #04391c;
+    --yes: #0a8f4e; --maybe: #b57b00; --no: #b4483c;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink);
+    font: 500 16px/1.7 "Zen Kaku Gothic New", "Hiragino Sans", "Yu Gothic", sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 24px 16px 80px; }
+  h1 { font-size: 26px; line-height: 1.3; margin: 8px 0 4px; font-weight: 700; letter-spacing: .01em; }
+  h2 { font-size: 17px; margin: 28px 0 8px; font-weight: 700; }
+  p.sub { margin: 0 0 20px; color: var(--muted); }
+  label { display: block; font-weight: 700; font-size: 14px; margin: 16px 0 4px; }
+  input, textarea, select { width: 100%; font: inherit; padding: 10px 12px; color: var(--ink);
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; }
+  input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-visible {
+    outline: 3px solid var(--line); outline-offset: 2px; }
+  button { font: inherit; cursor: pointer; border-radius: 6px; border: 1px solid var(--rule);
+    background: var(--surface); color: var(--ink); padding: 10px 14px; }
+  button.primary { background: var(--line); border-color: var(--line); color: var(--line-ink); font-weight: 700; width: 100%; padding: 14px; margin-top: 24px; }
+  button.ghost { color: var(--muted); }
+  button:disabled { opacity: .5; cursor: default; }
+  .cand-row { display: flex; gap: 8px; margin-bottom: 8px; }
+  .cand-row input { flex: 1; }
+  .notice { padding: 12px 14px; border-left: 4px solid var(--line); background: var(--surface); margin: 16px 0; }
+  .error { border-left-color: var(--no); color: var(--no); }
+  .hint { color: var(--muted); font-size: 14px; }
+  .slot { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+  .slot.confirmed { border: 2px solid var(--line); }
+  .slot-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .slot-date { font-weight: 700; font-size: 18px; }
+  .tally { font-size: 14px; color: var(--muted); }
+  .tally b { color: var(--ink); }
+  .names { font-size: 14px; margin-top: 6px; }
+  .names span { white-space: nowrap; margin-right: 10px; }
+  .y { color: var(--yes); } .m { color: var(--maybe); } .n { color: var(--no); }
+  .choice { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
+  .choice button { padding: 10px 0; font-weight: 700; }
+  .choice button[aria-pressed="true"][data-v="2"] { background: var(--yes); border-color: var(--yes); color: #fff; }
+  .choice button[aria-pressed="true"][data-v="1"] { background: var(--maybe); border-color: var(--maybe); color: #fff; }
+  .choice button[aria-pressed="true"][data-v="0"] { background: var(--no); border-color: var(--no); color: #fff; }
+  .confirm-btn { margin-top: 10px; width: 100%; border-color: var(--line); color: var(--line-ink); background: #e6f9ee; font-weight: 700; }
+  .linkbox { word-break: break-all; font-size: 14px; background: var(--surface); border: 1px solid var(--rule); padding: 10px; border-radius: 6px; margin: 6px 0 10px; }
+  @media (prefers-reduced-motion: no-preference) { button { transition: background-color .15s; } }
+</style>
+</head>
+<body>
+<main id="app"><p class="hint">読み込み中…</p></main>
+
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script>
+// 設定は config.js(ローカルは config.example.js をコピー、本番は GitHub Actions が生成)から読み込む
+const { SUPABASE_URL, SUPABASE_ANON_KEY } = window.APP_CONFIG || {};
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const app = document.getElementById("app");
+const params = new URLSearchParams(location.search);
+const MARK = { 2: "○", 1: "△", 0: "×" };
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmt = (iso) => new Date(iso).toLocaleString("ja-JP", { month: "numeric", day: "numeric", weekday: "short", hour: "2-digit", minute: "2-digit" });
+const store = {
+  get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch {} },
+};
+
+async function api(body) {
+  const { data, error } = await sb.functions.invoke("schedule-api", { body });
+  if (error) {
+    let msg = error.message;
+    try { msg = (await error.context.json()).error || msg; } catch {}
+    throw new Error(msg);
+  }
+  return data;
+}
+
+/* ---------- 新規作成 ---------- */
+async function renderCreate() {
+  const { data: groups } = await sb.from("line_groups").select("id,name").order("created_at");
+  app.innerHTML = `
+    <h1>日程調整を作る</h1>
+    <p class="sub">作成すると、選んだLINEグループに回答用リンクが届きます。</p>
+    ${groups?.length ? "" : `<div class="notice error">通知先のLINEグループがありません。Botをグループに招待して「登録」と発言してください。</div>`}
+    <label for="title">イベント名</label><input id="title" placeholder="例: 11月の定例ミーティング">
+    <label for="desc">メモ(任意)</label><textarea id="desc" rows="2"></textarea>
+    <label for="org">幹事の名前</label><input id="org" value="${esc(store.get("name") || "")}">
+    <label for="group">通知するLINEグループ</label>
+    <select id="group">${(groups || []).map((g) => `<option value="${esc(g.id)}">${esc(g.name || g.id)}</option>`).join("")}</select>
+    <label>候補日時</label>
+    <div id="cands"></div>
+    <button type="button" id="add">候補を追加</button>
+    <label for="deadline">回答期限(任意・24時間前にリマインドが届きます)</label>
+    <input id="deadline" type="datetime-local">
+    <div id="msg"></div>
+    <button class="primary" id="go">作成してLINEに通知する</button>`;
+
+  const cands = document.getElementById("cands");
+  const addRow = () => {
+    const row = document.createElement("div");
+    row.className = "cand-row";
+    row.innerHTML = `<input type="datetime-local" aria-label="候補日時"><button type="button" class="ghost" aria-label="この候補を削除">削除</button>`;
+    row.querySelector("button").onclick = () => cands.children.length > 1 && row.remove();
+    cands.appendChild(row);
+  };
+  addRow(); addRow();
+  document.getElementById("add").onclick = addRow;
+
+  document.getElementById("go").onclick = async (e) => {
+    const btn = e.target, msg = document.getElementById("msg");
+    const val = (id) => document.getElementById(id).value.trim();
+    const candidates = [...cands.querySelectorAll("input")].map((i) => i.value).filter(Boolean).map((v) => new Date(v).toISOString());
+    btn.disabled = true; msg.innerHTML = "";
+    try {
+      const r = await api({
+        action: "create_event", title: val("title"), description: val("desc"), organizer: val("org"),
+        group_id: document.getElementById("group").value,
+        deadline: val("deadline") ? new Date(val("deadline")).toISOString() : null, candidates,
+      });
+      store.set("name", val("org"));
+      store.set("admin:" + r.event_id, r.admin_token);
+      location.href = `?e=${r.event_id}&created=1`;
+    } catch (err) {
+      msg.innerHTML = `<div class="notice error">${esc(err.message)}</div>`;
+      btn.disabled = false;
+    }
+  };
+}
+
+/* ---------- 回答・確認 ---------- */
+async function renderEvent(id) {
+  const [{ data: ev }, { data: cands }, { data: rs }] = await Promise.all([
+    sb.from("events").select("*").eq("id", id).single(),
+    sb.from("candidates").select("*").eq("event_id", id).order("starts_at"),
+    sb.from("responses").select("*").eq("event_id", id),
+  ]);
+  if (!ev) { app.innerHTML = `<h1>イベントが見つかりません</h1><p class="sub">リンクをもう一度確認してください。</p>`; return; }
+
+  const adminToken = params.get("a") || store.get("admin:" + id);
+  const confirmed = ev.status === "confirmed";
+  const myName = store.get("name") || "";
+  const mine = {};
+  const byCand = {};
+  (rs || []).forEach((r) => { (byCand[r.candidate_id] ||= []).push(r); });
+
+  const slotHtml = (c) => {
+    const list = byCand[c.id] || [];
+    const grp = (v) => list.filter((r) => r.answer === v).map((r) => r.name);
+    const isConfirmed = ev.confirmed_candidate_id === c.id;
+    return `<div class="slot ${isConfirmed ? "confirmed" : ""}" data-c="${c.id}">
+      <div class="slot-head">
+        <span class="slot-date">${esc(fmt(c.starts_at))}${isConfirmed ? "　確定" : ""}</span>
+        <span class="tally"><b class="y">○ ${grp(2).length}</b>　<b class="m">△ ${grp(1).length}</b>　<b class="n">× ${grp(0).length}</b></span>
+      </div>
+      <div class="names">
+        ${grp(2).map((n) => `<span class="y">○ ${esc(n)}</span>`).join("")}
+        ${grp(1).map((n) => `<span class="m">△ ${esc(n)}</span>`).join("")}
+        ${grp(0).map((n) => `<span class="n">× ${esc(n)}</span>`).join("")}
+      </div>
+      ${confirmed ? "" : `<div class="choice" role="group" aria-label="${esc(fmt(c.starts_at))}の回答">
+        ${[2, 1, 0].map((v) => `<button type="button" data-v="${v}" aria-pressed="false">${MARK[v]}</button>`).join("")}</div>`}
+      ${adminToken && !confirmed ? `<button type="button" class="confirm-btn" data-confirm="${c.id}">この日で確定する</button>` : ""}
+    </div>`;
+  };
+
+  app.innerHTML = `
+    <h1>${esc(ev.title)}</h1>
+    <p class="sub">幹事: ${esc(ev.organizer)}${ev.deadline ? `　回答期限: ${esc(fmt(ev.deadline))}` : ""}</p>
+    ${ev.description ? `<p>${esc(ev.description)}</p>` : ""}
+    ${params.get("created") ? `<div class="notice">LINEグループに通知しました。${adminToken ? "このブラウザで確定操作ができます。幹事用リンクを控えておくと、別の端末からも確定できます。" : ""}
+      ${adminToken ? `<div class="linkbox">${esc(location.origin + location.pathname)}?e=${id}&amp;a=${esc(adminToken)}</div>` : ""}</div>` : ""}
+    ${confirmed ? `<div class="notice">日程は確定しました。</div>` : `
+      <label for="name">あなたの名前</label><input id="name" value="${esc(myName)}" autocomplete="name">`}
+    <h2>${confirmed ? "確定した日程" : "候補日時"}</h2>
+    ${(cands || []).map(slotHtml).join("")}
+    <div id="msg"></div>
+    ${confirmed ? "" : `<button class="primary" id="send">回答を送信する</button>`}`;
+
+  if (confirmed) return;
+
+  const pick = (cid, v) => {
+    mine[cid] = v;
+    app.querySelectorAll(`.slot[data-c="${cid}"] .choice button`).forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.v) === v)));
+  };
+  const preload = (name) => (rs || []).filter((r) => r.name === name.trim()).forEach((r) => pick(r.candidate_id, r.answer));
+  if (myName) preload(myName);
+  document.getElementById("name").addEventListener("change", (e) => preload(e.target.value));
+  app.querySelectorAll(".choice button").forEach((b) => b.onclick = () => pick(b.closest(".slot").dataset.c, Number(b.dataset.v)));
+
+  const msg = document.getElementById("msg");
+  document.getElementById("send").onclick = async (e) => {
+    const name = document.getElementById("name").value.trim();
+    if (!name) { msg.innerHTML = `<div class="notice error">名前を入力してください。</div>`; return; }
+    if (!Object.keys(mine).length) { msg.innerHTML = `<div class="notice error">1つ以上の候補に回答してください。</div>`; return; }
+    e.target.disabled = true;
+    try {
+      await api({ action: "respond", event_id: id, name, answers: mine });
+      store.set("name", name);
+      params.delete("created");
+      renderEvent(id);
+    } catch (err) {
+      msg.innerHTML = `<div class="notice error">${esc(err.message)}</div>`;
+      e.target.disabled = false;
+    }
+  };
+
+  app.querySelectorAll("[data-confirm]").forEach((b) => b.onclick = async () => {
+    if (!confirm("この日程で確定し、LINEグループに通知します。よろしいですか?")) return;
+    b.disabled = true;
+    try {
+      await api({ action: "confirm", event_id: id, admin_token: adminToken, candidate_id: b.dataset.confirm });
+      renderEvent(id);
+    } catch (err) {
+      msg.innerHTML = `<div class="notice error">${esc(err.message)}</div>`;
+      b.disabled = false;
+    }
+  });
+}
+
+(params.get("e") ? renderEvent(params.get("e")) : renderCreate()).catch((e) => {
+  app.innerHTML = `<div class="notice error">読み込みに失敗しました: ${esc(e.message)}</div>`;
+});
+</script>
+</body>
+</html>

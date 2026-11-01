@@ -1,0 +1,9 @@
+# secrets / local
+.env
+.env.*
+!.env.example
+web/config.js
+supabase/.temp/
+supabase/.branches/
+node_modules/
+.DS_Store
