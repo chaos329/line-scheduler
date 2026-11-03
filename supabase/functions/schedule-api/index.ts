@@ -1,7 +1,8 @@
 // 日程調整API: イベント作成 / 回答 / 確定。書き込みはすべてここ(service role)経由。
 // 作成・確定時にLINEグループへ通知する。
 import { db } from "../_shared/db.ts";
-import { fmt, pushText } from "../_shared/line.ts";
+import { pushText } from "../_shared/line.ts";
+import { confirmMessage, startMessage } from "../_shared/messages.ts";
 
 const APP_URL = Deno.env.get("APP_URL")!; // フロントのURL(例: https://xxx.vercel.app)
 
@@ -54,12 +55,9 @@ async function createEvent(p: any) {
   await db.from("event_secrets").insert({ event_id: ev.id, admin_token });
   await db.from("candidates").insert(candidates.map((c: string) => ({ event_id: ev.id, starts_at: c })));
 
-  const lines = [
-    `📅 日程調整が始まりました`, `「${title}」(幹事: ${organizer})`, "",
-    "候補:", ...candidates.map((c: string) => `・${fmt(c)}`), "",
-    deadline ? `回答期限: ${fmt(deadline)}` : "", `回答はこちら👇`, `${APP_URL}/?e=${ev.id}`,
-  ].filter((l, i, a) => l !== "" || a[i - 1] !== "");
-  await pushText(group_id, lines.join("\n"));
+  await pushText(group_id, startMessage({
+    title, organizer, candidates, deadline: deadline || null, url: `${APP_URL}/?e=${ev.id}`,
+  }));
 
   return json({ event_id: ev.id, admin_token });
 }
@@ -92,12 +90,9 @@ async function confirm(p: any) {
   const { data: rs } = await db.from("responses").select("name,answer").eq("candidate_id", candidate_id);
   const ok = (rs ?? []).filter((r) => r.answer === 2).map((r) => r.name);
   const maybe = (rs ?? []).filter((r) => r.answer === 1).map((r) => r.name);
-  const text = [
-    `✅ 日程が確定しました`, `「${ev.title}」`, `日時: ${fmt(cand.starts_at)}`,
-    ok.length ? `○ ${ok.join("、")}` : "", maybe.length ? `△ ${maybe.join("、")}` : "",
-    "", `${APP_URL}/?e=${event_id}`,
-  ].filter(Boolean).join("\n");
-  await pushText(ev.group_id, text);
+  await pushText(ev.group_id, confirmMessage({
+    title: ev.title, startsAt: cand.starts_at, ok, maybe, url: `${APP_URL}/?e=${event_id}`,
+  }));
   return json({ ok: true });
 }
 
