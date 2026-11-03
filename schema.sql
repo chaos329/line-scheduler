@@ -43,6 +43,7 @@ create table responses (
   candidate_id uuid not null references candidates(id) on delete cascade,
   name         text not null,
   answer       smallint not null check (answer in (0,1,2)),
+  note         text check (note is null or char_length(note) <= 100),  -- 備考(例: 19時までなら参加可能)
   updated_at   timestamptz not null default now(),
   unique (candidate_id, name)
 );

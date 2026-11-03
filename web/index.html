@@ -43,7 +43,9 @@
   .tally { font-size: 14px; color: var(--muted); }
   .tally b { color: var(--ink); }
   .names { font-size: 14px; margin-top: 6px; }
-  .names span { white-space: nowrap; margin-right: 10px; }
+  .names span { margin-right: 10px; display: inline-block; }
+  .note { color: var(--muted); font-size: 13px; margin-left: 2px; }
+  .note-in { margin-top: 8px; font-size: 14px; padding: 8px 10px; }
   .y { color: var(--yes); } .m { color: var(--maybe); } .n { color: var(--no); }
   .choice { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
   .choice button { padding: 10px 0; font-weight: 700; }
@@ -156,7 +158,8 @@ async function renderEvent(id) {
 
   const slotHtml = (c) => {
     const list = byCand[c.id] || [];
-    const grp = (v) => list.filter((r) => r.answer === v).map((r) => r.name);
+    const grp = (v) => list.filter((r) => r.answer === v);
+    const who = (cls, mark) => (r) => `<span class="${cls}">${mark} ${esc(r.name)}${r.note ? `<small class="note">(${esc(r.note)})</small>` : ""}</span>`;
     const isConfirmed = ev.confirmed_candidate_id === c.id;
     return `<div class="slot ${isConfirmed ? "confirmed" : ""}" data-c="${c.id}">
       <div class="slot-head">
@@ -164,12 +167,13 @@ async function renderEvent(id) {
         <span class="tally"><b class="y">○ ${grp(2).length}</b>　<b class="m">△ ${grp(1).length}</b>　<b class="n">× ${grp(0).length}</b></span>
       </div>
       <div class="names">
-        ${grp(2).map((n) => `<span class="y">○ ${esc(n)}</span>`).join("")}
-        ${grp(1).map((n) => `<span class="m">△ ${esc(n)}</span>`).join("")}
-        ${grp(0).map((n) => `<span class="n">× ${esc(n)}</span>`).join("")}
+        ${grp(2).map(who("y", "○")).join("")}
+        ${grp(1).map(who("m", "△")).join("")}
+        ${grp(0).map(who("n", "×")).join("")}
       </div>
       ${confirmed ? "" : `<div class="choice" role="group" aria-label="${esc(fmt(c.starts_at))}の回答">
-        ${[2, 1, 0].map((v) => `<button type="button" data-v="${v}" aria-pressed="false">${MARK[v]}</button>`).join("")}</div>`}
+        ${[2, 1, 0].map((v) => `<button type="button" data-v="${v}" aria-pressed="false">${MARK[v]}</button>`).join("")}</div>
+        <input type="text" class="note-in" maxlength="60" hidden placeholder="備考(例: 19時までなら参加できます)" aria-label="${esc(fmt(c.starts_at))}の備考">`}
       ${adminToken && !confirmed ? `<button type="button" class="confirm-btn" data-confirm="${c.id}">この日で確定する</button>` : ""}
     </div>`;
   };
@@ -189,11 +193,19 @@ async function renderEvent(id) {
 
   if (confirmed) return;
 
-  const pick = (cid, v) => {
-    mine[cid] = v;
-    app.querySelectorAll(`.slot[data-c="${cid}"] .choice button`).forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.v) === v)));
+  const pick = (cid, v, note) => {
+    mine[cid] = { answer: v, note: note ?? mine[cid]?.note ?? "" };
+    const slot = app.querySelector(`.slot[data-c="${cid}"]`);
+    slot.querySelectorAll(".choice button").forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.v) === v)));
+    const ni = slot.querySelector(".note-in");
+    ni.hidden = false;
+    if (note !== undefined) ni.value = note;
   };
-  const preload = (name) => (rs || []).filter((r) => r.name === name.trim()).forEach((r) => pick(r.candidate_id, r.answer));
+  const preload = (name) => (rs || []).filter((r) => r.name === name.trim()).forEach((r) => pick(r.candidate_id, r.answer, r.note || ""));
+  app.querySelectorAll(".note-in").forEach((i) => i.addEventListener("input", () => {
+    const c = i.closest(".slot").dataset.c;
+    if (mine[c]) mine[c].note = i.value;
+  }));
   if (myName) preload(myName);
   document.getElementById("name").addEventListener("change", (e) => preload(e.target.value));
   app.querySelectorAll(".choice button").forEach((b) => b.onclick = () => pick(b.closest(".slot").dataset.c, Number(b.dataset.v)));

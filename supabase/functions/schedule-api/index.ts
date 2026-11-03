@@ -33,7 +33,7 @@ async function getEvent(p: any) {
   if (!event) return json({ error: "イベントが見つかりません" }, 404);
   const [{ data: candidates }, { data: responses }] = await Promise.all([
     db.from("candidates").select("id,event_id,starts_at").eq("event_id", p.event_id).order("starts_at"),
-    db.from("responses").select("candidate_id,name,answer").eq("event_id", p.event_id),
+    db.from("responses").select("candidate_id,name,answer,note").eq("event_id", p.event_id),
   ]);
   return json({ event, candidates, responses });
 }
@@ -63,15 +63,20 @@ async function createEvent(p: any) {
 }
 
 async function respond(p: any) {
-  const { event_id, name, answers } = p; // answers: { [candidate_id]: 0|1|2 }
+  const { event_id, name, answers } = p; // answers: { [candidate_id]: { answer: 0|1|2, note?: string } }
   if (!event_id || !name?.trim() || !answers) return json({ error: "名前と回答は必須です" }, 400);
   const { data: ev } = await db.from("events").select("status").eq("id", event_id).single();
   if (!ev) return json({ error: "イベントが見つかりません" }, 404);
   if (ev.status === "confirmed") return json({ error: "この日程はすでに確定しています" }, 409);
 
-  const rows = Object.entries(answers).map(([candidate_id, answer]) => ({
-    event_id, candidate_id, name: name.trim(), answer, updated_at: new Date().toISOString(),
-  }));
+  const rows = Object.entries(answers).map(([candidate_id, a]: [string, any]) => {
+    const isObj = typeof a === "object" && a !== null;
+    const note = isObj && a.note ? String(a.note).trim().slice(0, 60) : "";
+    return {
+      event_id, candidate_id, name: name.trim(), answer: isObj ? a.answer : a,
+      note: note || null, updated_at: new Date().toISOString(),
+    };
+  });
   const { error } = await db.from("responses").upsert(rows, { onConflict: "candidate_id,name" });
   return error ? json({ error: error.message }, 400) : json({ ok: true });
 }
@@ -87,9 +92,9 @@ async function confirm(p: any) {
     .update({ status: "confirmed", confirmed_candidate_id: candidate_id })
     .eq("id", event_id).select().single();
 
-  const { data: rs } = await db.from("responses").select("name,answer").eq("candidate_id", candidate_id);
-  const ok = (rs ?? []).filter((r) => r.answer === 2).map((r) => r.name);
-  const maybe = (rs ?? []).filter((r) => r.answer === 1).map((r) => r.name);
+  const { data: rs } = await db.from("responses").select("name,answer,note").eq("candidate_id", candidate_id);
+  const ok = (rs ?? []).filter((r) => r.answer === 2).map((r) => ({ name: r.name, note: r.note }));
+  const maybe = (rs ?? []).filter((r) => r.answer === 1).map((r) => ({ name: r.name, note: r.note }));
   await pushText(ev.group_id, confirmMessage({
     title: ev.title, startsAt: cand.starts_at, ok, maybe, url: `${APP_URL}/?e=${event_id}`,
   }));

@@ -3,6 +3,9 @@
 import { fmt } from "./line.ts";
 
 const sama = (names: string[]) => names.map((n) => `${n}様`).join("、");
+// 備考があれば「田中様(19時まで)」の形にする
+type Person = { name: string; note?: string | null };
+const withNote = (list: Person[]) => list.map((r) => `${r.name}様${r.note ? `(${r.note})` : ""}`).join("、");
 
 // 日程調整の開始
 export function startMessage(p: {
@@ -25,7 +28,7 @@ export function startMessage(p: {
 
 // 日程の確定
 export function confirmMessage(p: {
-  title: string; startsAt: string; ok: string[]; maybe: string[]; url: string;
+  title: string; startsAt: string; ok: Person[]; maybe: Person[]; url: string;
 }) {
   return [
     "お待たせいたしました。秘書でございます。",
@@ -33,8 +36,8 @@ export function confirmMessage(p: {
     "",
     `📅 ${fmt(p.startsAt)}`,
     "",
-    ...(p.ok.length ? [`ご参加予定(○): ${sama(p.ok)}`] : []),
-    ...(p.maybe.length ? [`調整中(△): ${sama(p.maybe)}`] : []),
+    ...(p.ok.length ? [`ご参加予定(○): ${withNote(p.ok)}`] : []),
+    ...(p.maybe.length ? [`調整中(△): ${withNote(p.maybe)}`] : []),
     ...(p.ok.length || p.maybe.length ? [""] : []),
     "詳細は下記よりご確認いただけます。",
     p.url,
