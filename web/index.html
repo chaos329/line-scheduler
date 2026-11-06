@@ -46,6 +46,19 @@
   .names span { margin-right: 10px; display: inline-block; }
   .note { color: var(--muted); font-size: 13px; margin-left: 2px; }
   .note-in { margin-top: 8px; font-size: 14px; padding: 8px 10px; }
+  .loc { margin: 0 0 12px; word-break: break-all; }
+  .loc a { color: inherit; }
+  button.wide { width: 100%; margin-top: 12px; }
+  button.danger { width: 100%; border-color: var(--no); color: var(--no); font-weight: 700; margin-top: 8px; }
+  .check { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+  .check input { width: auto; }
+  .cand-row.existing { align-items: center; justify-content: space-between; background: var(--surface);
+    border: 1px solid var(--rule); border-radius: 6px; padding: 6px 6px 6px 12px; }
+  .cand-row.removed .cand-label { text-decoration: line-through; color: var(--muted); }
+  details.roster { margin-top: 28px; border-top: 1px solid var(--rule); padding-top: 12px; }
+  details.roster summary { cursor: pointer; font-weight: 700; }
+  details.roster textarea { margin-top: 8px; }
+  details.roster button { margin-top: 8px; }
   .y { color: var(--yes); } .m { color: var(--maybe); } .n { color: var(--no); }
   .choice { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
   .choice button { padding: 10px 0; font-weight: 700; }
@@ -77,6 +90,14 @@ const store = {
   set: (k, v) => { try { localStorage.setItem(k, v); } catch {} },
 };
 
+// http(s) の URL だけをリンクにする(それ以外は文字として表示)
+const linkify = (s) => /^https?:\/\/\S+$/.test(s)
+  ? `<a href="${esc(s)}" target="_blank" rel="noopener noreferrer">${esc(s)}</a>` : esc(s);
+const toLocalInput = (iso) => {
+  const d = new Date(iso), p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
 async function api(body) {
   const { data, error } = await sb.functions.invoke("schedule-api", { body });
   if (error) {
@@ -103,6 +124,7 @@ async function renderCreate() {
     <p class="sub">作成すると、LINEグループ${group.name ? `「${esc(group.name)}」` : ""}に回答用リンクが届きます。</p>
     <label for="title">イベント名</label><input id="title" placeholder="例: 11月の定例ミーティング">
     <label for="desc">メモ(任意)</label><textarea id="desc" rows="2"></textarea>
+    <label for="loc">場所・URL(任意)</label><input id="loc" maxlength="200" placeholder="例: 会議室A / https://meet.google.com/...">
     <label for="org">幹事の名前</label><input id="org" value="${esc(store.get("name") || "")}">
     <label>候補日時</label>
     <div id="cands"></div>
@@ -110,7 +132,14 @@ async function renderCreate() {
     <label for="deadline">回答期限(任意・24時間前にリマインドが届きます)</label>
     <input id="deadline" type="datetime-local">
     <div id="msg"></div>
-    <button class="primary" id="go">作成してLINEに通知する</button>`;
+    <button class="primary" id="go">作成してLINEに通知する</button>
+    <details class="roster">
+      <summary>メンバー名簿(任意)</summary>
+      <p class="hint">名簿を登録すると、回答期限のリマインドで未回答の方を名指しし、全員(幹事を除く)が回答したら幹事宛にお知らせします。1行に1人、回答時に入力する名前と同じ表記で入れてください。幹事の名前が入っていても構いません。</p>
+      <textarea id="members" rows="6" placeholder="田中&#10;佐藤&#10;鈴木">${esc((group.members || []).join("\n"))}</textarea>
+      <button type="button" id="save-members">名簿を保存する</button>
+      <div id="members-msg" role="status"></div>
+    </details>`;
 
   const cands = document.getElementById("cands");
   const addRow = () => {
@@ -123,6 +152,20 @@ async function renderCreate() {
   addRow(); addRow();
   document.getElementById("add").onclick = addRow;
 
+  document.getElementById("save-members").onclick = async (e) => {
+    const out = document.getElementById("members-msg");
+    e.target.disabled = true;
+    try {
+      const members = document.getElementById("members").value.split("\n");
+      const r = await api({ action: "set_members", create_token: token, members });
+      document.getElementById("members").value = r.members.join("\n");
+      out.innerHTML = `<div class="notice">${r.members.length}名の名簿を保存しました。</div>`;
+    } catch (err) {
+      out.innerHTML = `<div class="notice error">${esc(err.message)}</div>`;
+    }
+    e.target.disabled = false;
+  };
+
   document.getElementById("go").onclick = async (e) => {
     const btn = e.target, msg = document.getElementById("msg");
     const val = (id) => document.getElementById(id).value.trim();
@@ -130,7 +173,7 @@ async function renderCreate() {
     btn.disabled = true; msg.innerHTML = "";
     try {
       const r = await api({
-        action: "create_event", title: val("title"), description: val("desc"), organizer: val("org"),
+        action: "create_event", title: val("title"), description: val("desc"), location: val("loc"), organizer: val("org"),
         create_token: token,
         deadline: val("deadline") ? new Date(val("deadline")).toISOString() : null, candidates,
       });
@@ -146,7 +189,7 @@ async function renderCreate() {
 
 /* ---------- 回答・確認 ---------- */
 async function renderEvent(id) {
-  const { event: ev, candidates: cands, responses: rs } = await api({ action: "get_event", event_id: id }).catch(() => ({}));
+  const { event: ev, candidates: cands, responses: rs, members = [] } = await api({ action: "get_event", event_id: id }).catch(() => ({}));
   if (!ev) { app.innerHTML = `<h1>イベントが見つかりません</h1><p class="sub">リンクをもう一度確認してください。</p>`; return; }
 
   const adminToken = params.get("a") || store.get("admin:" + id);
@@ -181,15 +224,21 @@ async function renderEvent(id) {
   app.innerHTML = `
     <h1>${esc(ev.title)}</h1>
     <p class="sub">幹事: ${esc(ev.organizer)}${ev.deadline ? `　回答期限: ${esc(fmt(ev.deadline))}` : ""}</p>
+    ${ev.location ? `<p class="loc">📍 場所・URL: ${linkify(ev.location)}</p>` : ""}
     ${ev.description ? `<p>${esc(ev.description)}</p>` : ""}
+    ${adminToken ? `<button type="button" class="wide" id="edit-open">イベントを編集・削除する</button>` : ""}
     ${params.get("created") ? `<div class="notice">LINEグループに通知しました。${adminToken ? "このブラウザで確定操作ができます。幹事用リンクを控えておくと、別の端末からも確定できます。" : ""}
       ${adminToken ? `<div class="linkbox">${esc(location.origin + location.pathname)}?e=${id}&amp;a=${esc(adminToken)}</div>` : ""}</div>` : ""}
     ${confirmed ? `<div class="notice">日程は確定しました。</div>` : `
-      <label for="name">あなたの名前</label><input id="name" value="${esc(myName)}" autocomplete="name">`}
+      <label for="name">あなたの名前</label><input id="name" value="${esc(myName)}" autocomplete="name" list="member-list" maxlength="30">
+      <datalist id="member-list">${members.map((m) => `<option value="${esc(m)}">`).join("")}</datalist>`}
     <h2>${confirmed ? "確定した日程" : "候補日時"}</h2>
     ${(cands || []).map(slotHtml).join("")}
     <div id="msg"></div>
     ${confirmed ? "" : `<button class="primary" id="send">回答を送信する</button>`}`;
+
+  const eo = document.getElementById("edit-open");
+  if (eo) eo.onclick = () => renderEdit(id, adminToken);
 
   if (confirmed) return;
 
@@ -238,6 +287,81 @@ async function renderEvent(id) {
       b.disabled = false;
     }
   });
+}
+
+/* ---------- 幹事: 編集・削除 ---------- */
+async function renderEdit(id, adminToken) {
+  const { event: ev, candidates: cands } = await api({ action: "get_event", event_id: id });
+  const confirmed = ev.status === "confirmed";
+  const removed = new Set();
+  app.innerHTML = `
+    <h1>イベントを編集</h1>
+    <p class="sub">${esc(ev.title)}</p>
+    ${confirmed ? `<div class="notice">確定済みのため、候補日時と回答期限は変更できません。</div>` : ""}
+    <label for="e-title">イベント名</label><input id="e-title" value="${esc(ev.title)}" maxlength="100">
+    <label for="e-desc">メモ</label><textarea id="e-desc" rows="2" maxlength="500">${esc(ev.description || "")}</textarea>
+    <label for="e-loc">場所・URL</label><input id="e-loc" value="${esc(ev.location || "")}" maxlength="200">
+    ${confirmed ? "" : `
+      <label>候補日時</label>
+      <div id="e-cands">${cands.map((c) => `<div class="cand-row existing" data-id="${c.id}"><span class="cand-label">${esc(fmt(c.starts_at))}</span><button type="button" class="ghost" data-toggle="${c.id}">取り下げ</button></div>`).join("")}</div>
+      <p class="hint">取り下げた候補への回答は削除されます。</p>
+      <div id="e-new"></div>
+      <button type="button" id="e-add">候補を追加</button>
+      <label for="e-deadline">回答期限(変更するとリマインドもやり直されます)</label>
+      <input id="e-deadline" type="datetime-local" value="${ev.deadline ? toLocalInput(ev.deadline) : ""}">`}
+    <label class="check" style="margin-top:20px"><input type="checkbox" id="e-notify" checked>変更内容をLINEグループに通知する</label>
+    <div id="msg" role="status"></div>
+    <button class="primary" id="e-save">変更を保存する</button>
+    <button type="button" class="wide" id="e-back">編集をやめて戻る</button>
+    <h2>イベントの削除</h2>
+    <p class="hint">イベントと回答がすべて削除され、LINEグループに中止をお知らせします。元に戻せません。</p>
+    <button type="button" class="danger" id="e-delete">このイベントを削除する</button>`;
+
+  const msg = document.getElementById("msg");
+  const val = (i) => document.getElementById(i).value.trim();
+  document.getElementById("e-back").onclick = () => renderEvent(id);
+
+  if (!confirmed) {
+    app.querySelectorAll("[data-toggle]").forEach((b) => b.onclick = () => {
+      const cid = b.dataset.toggle, row = b.closest(".cand-row");
+      if (removed.has(cid)) { removed.delete(cid); row.classList.remove("removed"); b.textContent = "取り下げ"; }
+      else { removed.add(cid); row.classList.add("removed"); b.textContent = "取り下げを取消"; }
+    });
+    const box = document.getElementById("e-new");
+    document.getElementById("e-add").onclick = () => {
+      const row = document.createElement("div");
+      row.className = "cand-row";
+      row.innerHTML = `<input type="datetime-local" aria-label="追加する候補日時"><button type="button" class="ghost" aria-label="この候補を削除">削除</button>`;
+      row.querySelector("button").onclick = () => row.remove();
+      box.appendChild(row);
+    };
+  }
+
+  document.getElementById("e-save").onclick = async (e) => {
+    e.target.disabled = true; msg.innerHTML = "";
+    const body = {
+      action: "update_event", event_id: id, admin_token: adminToken,
+      title: val("e-title"), description: val("e-desc"), location: val("e-loc"),
+      notify: document.getElementById("e-notify").checked,
+    };
+    if (!confirmed) {
+      body.deadline = val("e-deadline") ? new Date(val("e-deadline")).toISOString() : null;
+      body.add_candidates = [...document.querySelectorAll("#e-new input")].map((i) => i.value).filter(Boolean).map((v) => new Date(v).toISOString());
+      body.remove_candidate_ids = [...removed];
+    }
+    try { await api(body); renderEvent(id); }
+    catch (err) { msg.innerHTML = `<div class="notice error">${esc(err.message)}</div>`; e.target.disabled = false; }
+  };
+
+  document.getElementById("e-delete").onclick = async (e) => {
+    if (!confirm("このイベントを削除し、LINEグループに中止を通知します。元に戻せません。よろしいですか?")) return;
+    e.target.disabled = true;
+    try {
+      await api({ action: "delete_event", event_id: id, admin_token: adminToken });
+      try { localStorage.removeItem("admin:" + id); } catch {}
+      app.innerHTML = `<h1>削除しました</h1><p class="sub">LINEグループには中止をお知らせしました。</p>`;
+    } catch (err) { msg.innerHTML = `<div class="notice error">${esc(err.message)}</div>`; e.target.disabled = false; }
+  };
 }
 
 (params.get("e") ? renderEvent(params.get("e")) : renderCreate()).catch((e) => {

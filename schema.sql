@@ -5,6 +5,7 @@ create table line_groups (
   id          text primary key,          -- LINEのgroupId
   name        text,
   -- グループ専用の作成ページ用トークン。画面からは読めない(Edge Function 経由でのみ照合)
+  members     text[] not null default '{}',   -- 名簿(未回答の名指し・全員回答済み通知に使用)
   create_token text not null unique
               default replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', ''),
   created_at  timestamptz not null default now()
@@ -15,11 +16,13 @@ create table events (
   title       text not null,
   description text,
   organizer   text not null,
+  location    text check (location is null or char_length(location) <= 200),  -- 開催場所・URL
   group_id    text not null references line_groups(id),
   deadline    timestamptz,               -- 回答期限(任意)
   status      text not null default 'open' check (status in ('open','confirmed')),
   confirmed_candidate_id uuid,
   reminded    boolean not null default false,
+  completed_notified boolean not null default false,   -- 「全員回答済み」通知を送信済みか
   created_at  timestamptz not null default now()
 );
 
