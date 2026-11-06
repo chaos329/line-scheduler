@@ -50,22 +50,17 @@ export function confirmMessage(p: {
   ].join("\n");
 }
 
-// 回答期限のリマインド(unanswered が渡されたら未回答の方を名指しする)
-export function remindMessage(p: {
-  title: string; deadline: string; answered: string[]; unanswered?: string[]; url: string;
-}) {
+// 回答期限のリマインド
+export function remindMessage(p: { title: string; deadline: string; names: string[]; url: string }) {
   return [
     "お忙しいところ恐れ入ります。秘書でございます。",
     `「${p.title}」の回答期限が、${fmt(p.deadline)}と迫っております。`,
     "",
-    p.answered.length
-      ? `ご回答済み(${p.answered.length}名): ${sama(p.answered)}`
+    p.names.length
+      ? `ご回答済み(${p.names.length}名): ${sama(p.names)}`
       : "現時点で、ご回答はまだいただいておりません。",
-    ...(p.unanswered?.length ? [`ご回答をお待ちしている方: ${sama(p.unanswered)}`] : []),
     "",
-    p.unanswered?.length
-      ? "お手数をおかけしますが、下記よりご回答をお願いいたします。"
-      : "まだの方は、お手数ですが下記よりご回答をお願いいたします。",
+    "まだの方は、お手数ですが下記よりご回答をお願いいたします。",
     p.url,
   ].join("\n");
 }

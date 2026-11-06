@@ -55,10 +55,6 @@
   .cand-row.existing { align-items: center; justify-content: space-between; background: var(--surface);
     border: 1px solid var(--rule); border-radius: 6px; padding: 6px 6px 6px 12px; }
   .cand-row.removed .cand-label { text-decoration: line-through; color: var(--muted); }
-  details.roster { margin-top: 28px; border-top: 1px solid var(--rule); padding-top: 12px; }
-  details.roster summary { cursor: pointer; font-weight: 700; }
-  details.roster textarea { margin-top: 8px; }
-  details.roster button { margin-top: 8px; }
   .y { color: var(--yes); } .m { color: var(--maybe); } .n { color: var(--no); }
   .choice { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
   .choice button { padding: 10px 0; font-weight: 700; }
@@ -132,14 +128,7 @@ async function renderCreate() {
     <label for="deadline">回答期限(任意・24時間前にリマインドが届きます)</label>
     <input id="deadline" type="datetime-local">
     <div id="msg"></div>
-    <button class="primary" id="go">作成してLINEに通知する</button>
-    <details class="roster">
-      <summary>メンバー名簿(任意)</summary>
-      <p class="hint">名簿を登録すると、回答期限のリマインドで未回答の方を名指しし、全員(幹事を除く)が回答したら幹事宛にお知らせします。1行に1人、回答時に入力する名前と同じ表記で入れてください。幹事の名前が入っていても構いません。</p>
-      <textarea id="members" rows="6" placeholder="田中&#10;佐藤&#10;鈴木">${esc((group.members || []).join("\n"))}</textarea>
-      <button type="button" id="save-members">名簿を保存する</button>
-      <div id="members-msg" role="status"></div>
-    </details>`;
+    <button class="primary" id="go">作成してLINEに通知する</button>`;
 
   const cands = document.getElementById("cands");
   const addRow = () => {
@@ -151,20 +140,6 @@ async function renderCreate() {
   };
   addRow(); addRow();
   document.getElementById("add").onclick = addRow;
-
-  document.getElementById("save-members").onclick = async (e) => {
-    const out = document.getElementById("members-msg");
-    e.target.disabled = true;
-    try {
-      const members = document.getElementById("members").value.split("\n");
-      const r = await api({ action: "set_members", create_token: token, members });
-      document.getElementById("members").value = r.members.join("\n");
-      out.innerHTML = `<div class="notice">${r.members.length}名の名簿を保存しました。</div>`;
-    } catch (err) {
-      out.innerHTML = `<div class="notice error">${esc(err.message)}</div>`;
-    }
-    e.target.disabled = false;
-  };
 
   document.getElementById("go").onclick = async (e) => {
     const btn = e.target, msg = document.getElementById("msg");
@@ -189,7 +164,7 @@ async function renderCreate() {
 
 /* ---------- 回答・確認 ---------- */
 async function renderEvent(id) {
-  const { event: ev, candidates: cands, responses: rs, members = [] } = await api({ action: "get_event", event_id: id }).catch(() => ({}));
+  const { event: ev, candidates: cands, responses: rs } = await api({ action: "get_event", event_id: id }).catch(() => ({}));
   if (!ev) { app.innerHTML = `<h1>イベントが見つかりません</h1><p class="sub">リンクをもう一度確認してください。</p>`; return; }
 
   const adminToken = params.get("a") || store.get("admin:" + id);
@@ -230,8 +205,7 @@ async function renderEvent(id) {
     ${params.get("created") ? `<div class="notice">LINEグループに通知しました。${adminToken ? "このブラウザで確定操作ができます。幹事用リンクを控えておくと、別の端末からも確定できます。" : ""}
       ${adminToken ? `<div class="linkbox">${esc(location.origin + location.pathname)}?e=${id}&amp;a=${esc(adminToken)}</div>` : ""}</div>` : ""}
     ${confirmed ? `<div class="notice">日程は確定しました。</div>` : `
-      <label for="name">あなたの名前</label><input id="name" value="${esc(myName)}" autocomplete="name" list="member-list" maxlength="30">
-      <datalist id="member-list">${members.map((m) => `<option value="${esc(m)}">`).join("")}</datalist>`}
+      <label for="name">あなたの名前</label><input id="name" value="${esc(myName)}" autocomplete="name" maxlength="30">`}
     <h2>${confirmed ? "確定した日程" : "候補日時"}</h2>
     ${(cands || []).map(slotHtml).join("")}
     <div id="msg"></div>

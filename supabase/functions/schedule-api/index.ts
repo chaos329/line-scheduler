@@ -1,11 +1,10 @@
-// 日程調整API: イベント作成 / 取得 / 回答 / 確定 / 編集 / 削除 / 名簿の更新。
+// 日程調整API: イベント作成 / 取得 / 回答 / 確定 / 編集 / 削除。
 // 書き込みはすべてここ(サーバー側キー)経由。必要に応じてLINEグループへ通知する。
 import { db } from "../_shared/db.ts";
-import { fmt, pushText } from "../_shared/line.ts";
+import { fmt, groupMemberCount, pushText } from "../_shared/line.ts";
 import {
   cancelMessage, completeMessage, confirmMessage, startMessage, updateMessage,
 } from "../_shared/messages.ts";
-import { norm, requiredCount, unansweredNames } from "../_shared/roster.ts";
 
 const APP_URL = Deno.env.get("APP_URL")!; // フロントのURL(例: https://xxx.github.io/line-scheduler)
 
@@ -18,12 +17,14 @@ const json = (data: unknown, status = 200) =>
 
 const INVALID_URL = "このURLは無効です。LINEグループで「登録」と発言して、専用URLを確認してください";
 const text = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+// 回答者名の照合用(全角/半角・空白・大文字小文字の違いを無視)
+const norm = (s: string) => s.normalize("NFKC").replace(/\s+/g, "").toLowerCase();
 const validDate = (v: unknown) => typeof v === "string" && !isNaN(Date.parse(v));
 
 // グループ専用トークン → グループ(トークンが違えば null)
 async function groupByToken(token: unknown) {
   if (typeof token !== "string" || token.length < 32) return null;
-  const { data } = await db.from("line_groups").select("id,name,members").eq("create_token", token).maybeSingle();
+  const { data } = await db.from("line_groups").select("id,name").eq("create_token", token).maybeSingle();
   return data;
 }
 
@@ -35,39 +36,21 @@ async function isAdmin(event_id: unknown, token: unknown) {
 
 async function getGroup(p: any) {
   const g = await groupByToken(p.create_token);
-  return g ? json({ name: g.name, members: g.members ?? [] }) : json({ error: INVALID_URL }, 404);
-}
-
-// 名簿の更新(グループ専用URLを知っている人のみ)
-async function setMembers(p: any) {
-  const g = await groupByToken(p.create_token);
-  if (!g) return json({ error: INVALID_URL }, 403);
-  const seen = new Set<string>();
-  const members: string[] = [];
-  for (const raw of Array.isArray(p.members) ? p.members : []) {
-    const n = text(raw, 20);
-    if (!n || seen.has(norm(n))) continue;
-    seen.add(norm(n));
-    members.push(n);
-    if (members.length >= 50) break;
-  }
-  const { error } = await db.from("line_groups").update({ members }).eq("id", g.id);
-  return error ? json({ error: error.message }, 400) : json({ ok: true, members });
+  return g ? json({ name: g.name }) : json({ error: INVALID_URL }, 404);
 }
 
 // group_id は返さない。イベントIDを知っている人だけが読める
 async function getEvent(p: any) {
   const { data } = await db.from("events")
-    .select("id,title,description,location,organizer,deadline,status,confirmed_candidate_id,group_id")
+    .select("id,title,description,location,organizer,deadline,status,confirmed_candidate_id")
     .eq("id", p.event_id).maybeSingle();
   if (!data) return json({ error: "イベントが見つかりません" }, 404);
-  const { group_id, ...event } = data;
-  const [{ data: candidates }, { data: responses }, { data: g }] = await Promise.all([
+  const event = data;
+  const [{ data: candidates }, { data: responses }] = await Promise.all([
     db.from("candidates").select("id,event_id,starts_at").eq("event_id", p.event_id).order("starts_at"),
     db.from("responses").select("candidate_id,name,answer,note").eq("event_id", p.event_id),
-    db.from("line_groups").select("members").eq("id", group_id).maybeSingle(),
   ]);
-  return json({ event, candidates, responses, members: g?.members ?? [] });
+  return json({ event, candidates, responses });
 }
 
 async function createEvent(p: any) {
@@ -98,19 +81,23 @@ async function createEvent(p: any) {
   return json({ event_id: ev.id, admin_token });
 }
 
-// 全員(名簿 − 幹事)の回答が揃ったら、幹事宛に1回だけ通知する。名簿が未登録なら何もしない。
+// グループの人数(Botを除く)から幹事1人を除いた人数分の回答が揃ったら、幹事宛に1回だけ通知する。
+// 幹事は回答していなくてもよい。幹事の名前での回答は人数に数えない。
+// グループの人数を取得できないとき、または幹事しかいないグループでは何もしない。
 async function notifyIfComplete(ev: any) {
   if (ev.completed_notified) return;
-  const { data: g } = await db.from("line_groups").select("members").eq("id", ev.group_id).maybeSingle();
-  const members: string[] = g?.members ?? [];
-  if (requiredCount(members, ev.organizer) === 0) return;
-
   const [{ data: rs }, { data: cands }] = await Promise.all([
     db.from("responses").select("candidate_id,name,answer").eq("event_id", ev.id),
     db.from("candidates").select("id,starts_at").eq("event_id", ev.id).order("starts_at"),
   ]);
-  const answered = [...new Set((rs ?? []).map((r) => r.name))];
-  if (unansweredNames(members, ev.organizer, answered).length > 0) return;
+  const org = norm(ev.organizer);
+  const responders = new Set((rs ?? []).map((r) => norm(r.name)).filter((n) => n !== org));
+  if (responders.size === 0) return;
+
+  const count = await groupMemberCount(ev.group_id);
+  if (count === null) return;
+  const required = count - 1; // 幹事を除く
+  if (required < 1 || responders.size < required) return;
 
   // 同時回答での二重通知を防ぐため、フラグを先に立てた1回だけが送信する
   const { data: claimed } = await db.from("events")
@@ -270,7 +257,6 @@ Deno.serve(async (req) => {
     const p = await req.json();
     switch (p.action) {
       case "get_group": return await getGroup(p);
-      case "set_members": return await setMembers(p);
       case "get_event": return await getEvent(p);
       case "create_event": return await createEvent(p);
       case "respond": return await respond(p);

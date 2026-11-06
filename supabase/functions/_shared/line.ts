@@ -24,6 +24,18 @@ export async function groupName(groupId: string): Promise<string | null> {
   return res.ok ? (await res.json()).groupName ?? null : null;
 }
 
+// グループの人数(Bot自身は含まない)。取得できないときは null。
+export async function groupMemberCount(groupId: string): Promise<number | null> {
+  try {
+    const res = await fetch(`https://api.line.me/v2/bot/group/${groupId}/members/count`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
+    if (!res.ok) { console.error("group member count failed", res.status, await res.text()); return null; }
+    const j = await res.json();
+    return typeof j.count === "number" ? j.count : null;
+  } catch (e) { console.error("group member count error", e); return null; }
+}
+
 export const fmt = (iso: string) =>
   new Date(iso).toLocaleString("ja-JP", {
     timeZone: "Asia/Tokyo", month: "numeric", day: "numeric", weekday: "short",
